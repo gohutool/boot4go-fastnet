@@ -151,6 +151,46 @@ func TestOnDataBase(t *testing.T) {
 	}
 }
 
+func TestNetServer(t *testing.T) {
+
+	l, err := net.Listen("tcp", ":9888")
+	if err != nil {
+		fmt.Println("Start server error " + err.Error())
+		return
+	}
+
+	for {
+		var c net.Conn
+		var err error
+		if c, err = l.Accept(); err != nil {
+			panic(err)
+		}
+
+		go serverConn(c)
+	}
+}
+
+func serverConn(c net.Conn) {
+	b := make([]byte, 1024*4)
+	for {
+		n, err := c.Read(b)
+
+		if err != nil {
+			fmt.Printf("Read %v\n", err)
+			c.Close()
+			break
+		}
+
+		_, err2 := c.Write(b[0:n])
+
+		if err2 != nil {
+			fmt.Printf("Write error %v\n", err2)
+			c.Close()
+			break
+		}
+	}
+}
+
 func TestClient(t *testing.T) {
 	var clientNum = 1
 	var msgSize = 1024 * 20
