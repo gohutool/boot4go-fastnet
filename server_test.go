@@ -2,6 +2,7 @@ package fastnet
 
 import (
 	"fmt"
+	"github.com/gohutool/boot4go-fastnet/codec"
 	"io"
 	"net"
 	"net/http"
@@ -126,6 +127,107 @@ func TestOnDataBase(t *testing.T) {
 			}
 
 			Logger.Debug("recv %v %v\n", cnt, n)
+		}
+
+		return nil
+	})
+
+	OnClose := OnClose(func(ctx *RequestCtx, err error) {
+		if err != nil {
+			fmt.Printf("%v\n", err)
+		}
+	})
+
+	go func() {
+		http.ListenAndServe("0.0.0.0:8887", nil)
+	}()
+
+	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
+	s.OnData = handler
+	s.OnClose = OnClose
+	err = s.Serve(l)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func TestDelimiterDecoderBase(t *testing.T) {
+
+	l, err := net.Listen("tcp", ":9888")
+	if err != nil {
+		fmt.Println("Start server error " + err.Error())
+		return
+	}
+
+	codec, err := codec.DelimiterBasedFrameDecoder([]byte("\n"))
+
+	if err != nil {
+		panic(err)
+	}
+
+	handler := OnData(func(ctx *RequestCtx, nread int) error {
+		bytesArray, err := codec(ctx.Bytebuffer)
+
+		if err != nil {
+			return err
+		}
+
+		if bytesArray != nil {
+			for _, one := range *bytesArray {
+				ctx.c.Write(one)
+			}
+		}
+
+		return nil
+	})
+
+	OnClose := OnClose(func(ctx *RequestCtx, err error) {
+		if err != nil {
+			fmt.Printf("%v\n", err)
+		}
+	})
+
+	go func() {
+		http.ListenAndServe("0.0.0.0:8887", nil)
+	}()
+
+	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
+	s.OnData = handler
+	s.OnClose = OnClose
+	err = s.Serve(l)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func TestStringLineDecoderBase(t *testing.T) {
+
+	l, err := net.Listen("tcp", ":9888")
+	if err != nil {
+		fmt.Println("Start server error " + err.Error())
+		return
+	}
+
+	codec, err := codec.StringLineDecoder()
+
+	if err != nil {
+		panic(err)
+	}
+
+	handler := OnData(func(ctx *RequestCtx, nread int) error {
+		strs, err := codec(ctx.Bytebuffer)
+
+		if err != nil {
+			return err
+		}
+
+		if strs != nil {
+			for _, one := range *strs {
+				fmt.Println(one)
+				ctx.c.Write([]byte(one))
+			}
 		}
 
 		return nil
