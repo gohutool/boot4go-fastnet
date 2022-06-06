@@ -593,7 +593,7 @@ func TestFixLengthFieldPackageClient(t *testing.T) {
 }
 
 func TestLengthFieldBasePackageClient(t *testing.T) {
-	var clientNum = 1
+	var clientNum = 1000
 
 	var wg sync.WaitGroup
 	wg.Add(clientNum)
