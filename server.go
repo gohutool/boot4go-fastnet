@@ -1,7 +1,6 @@
 package fastnet
 
 import (
-	"bufio"
 	"crypto/tls"
 	routine "github.com/gohutool/boot4go-routine"
 	util4go "github.com/gohutool/boot4go-util"
@@ -51,8 +50,8 @@ type RequestCtx struct {
 	c          net.Conn
 	s          *server
 	Bytebuffer *data.ByteBuffer
-
-	mu sync.Mutex
+	OutBuffer  *data.ByteBuffer
+	mu         sync.Mutex
 }
 
 // ConnID returns unique connection ID.
@@ -100,12 +99,18 @@ func (ctx *RequestCtx) reset() {
 
 	ctx.s.bufferPool.Put(ctx.Bytebuffer)
 	ctx.Bytebuffer = nil
+	ctx.s.bufferPool.Put(ctx.OutBuffer)
+	ctx.OutBuffer = nil
 }
 
 // GetByteBuffer Maybe concurrency matter
 
 func (ctx *RequestCtx) GetByteBuffer() *data.ByteBuffer {
 	return ctx.Bytebuffer
+}
+
+func (ctx *RequestCtx) GetOutBuffer() *data.ByteBuffer {
+	return ctx.OutBuffer
 }
 
 func (ctx *RequestCtx) GetConn() net.Conn {
@@ -305,7 +310,6 @@ type server struct {
 
 	ctxPool    sync.Pool
 	readerPool sync.Pool
-	writerPool sync.Pool
 	bufferPool data.Pool
 
 	// We need to know our listeners and idle connections so we can close them in Shutdown().
@@ -481,6 +485,7 @@ func (s *server) initContext(c net.Conn, requestCtx *RequestCtx) {
 	requestCtx.s = s
 	requestCtx.remoteAddr = c.RemoteAddr()
 	requestCtx.Bytebuffer = s.bufferPool.Get()
+	requestCtx.OutBuffer = s.bufferPool.Get()
 }
 
 func (s *server) wrapContext(c net.Conn, requestCtx *RequestCtx) {
@@ -658,22 +663,4 @@ func (ctx *RequestCtx) acquireReader() []byte {
 
 func (ctx *RequestCtx) releaseReader(r []byte) {
 	ctx.s.readerPool.Put(r)
-}
-
-func (ctx *RequestCtx) acquireWriter() *bufio.Writer {
-	v := ctx.s.writerPool.Get()
-	if v == nil {
-		n := ctx.s.WriteBufferSize
-		if n <= 0 {
-			n = defaultWriteBufferSize
-		}
-		return bufio.NewWriterSize(ctx.c, n)
-	}
-	w := v.(*bufio.Writer)
-	w.Reset(ctx.c)
-	return w
-}
-
-func (ctx *RequestCtx) releaseWriter(w *bufio.Writer) {
-	ctx.s.writerPool.Put(w)
 }
