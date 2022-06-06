@@ -266,18 +266,6 @@ type server struct {
 	// By default, request read timeout is unlimited.
 	ReadTimeout time.Duration
 
-	// WriteTimeout is the maximum duration before timing out
-	// writes of the response. It is reset after the request handler
-	// has returned.
-	//
-	// By default, response write timeout is unlimited.
-	WriteTimeout time.Duration
-
-	// IdleTimeout is the maximum amount of time to wait for the
-	// next request when keep-alive is enabled. If IdleTimeout
-	// is zero, the value of ReadTimeout is used.
-	IdleTimeout time.Duration
-
 	// Maximum number of concurrent client connections allowed per IP.
 	//
 	// By default, unlimited number of concurrent connections
@@ -424,6 +412,10 @@ var DefaultRequestHandler = func(ctx *RequestCtx) {
 
 	for {
 		//
+		if ctx.s.ReadTimeout > 0 {
+			ctx.c.SetReadDeadline(time.Now().Add(ctx.s.ReadTimeout))
+		}
+
 		nread, err := ctx.c.Read(b)
 
 		atomic.AddInt64(&readCount, int64(nread))
@@ -441,6 +433,13 @@ var DefaultRequestHandler = func(ctx *RequestCtx) {
 			ctx.Bytebuffer.Write(b[:nread])
 			err = ctx.s.OnData(ctx, nread)
 			//ctx.c.Write(append([]byte{}, b[:nread]...))
+		} else {
+			//netErr, ok := err.(net.Error); ok && netErr.Timeout()
+			if ctx.s.ReadTimeout > 0 && err != nil {
+				ctx.CloseConn(err)
+				//p.Put(b)
+				break
+			}
 		}
 
 		if err != nil {

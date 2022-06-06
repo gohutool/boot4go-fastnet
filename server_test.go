@@ -145,6 +145,8 @@ func TestOnDataBase(t *testing.T) {
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
 	s.OnData = handler
 	s.OnClose = OnClose
+	s.ReadTimeout = 10 * time.Second
+
 	err = s.Serve(l)
 
 	if err != nil {
