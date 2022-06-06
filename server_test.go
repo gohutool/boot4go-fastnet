@@ -134,7 +134,7 @@ func TestOnDataBase(t *testing.T) {
 
 	OnClose := OnClose(func(ctx *RequestCtx, err error) {
 		if err != nil {
-			fmt.Printf("%v\n", err)
+			fmt.Printf("Close with %v\n", err)
 		}
 	})
 
