@@ -50,8 +50,9 @@ type RequestCtx struct {
 	c          net.Conn
 	s          *server
 	Bytebuffer *data.ByteBuffer
-	OutBuffer  *data.ByteBuffer
 	mu         sync.Mutex
+
+	eventChannel *routine.EventChannel[writeEventChannelObject]
 }
 
 // ConnID returns unique connection ID.
@@ -91,26 +92,46 @@ func (ctx *RequestCtx) RemoteAddr() net.Addr {
 }
 
 func (ctx *RequestCtx) reset() {
+
 	ctx.connID = 0
 	ctx.connTime = zeroTime
 	ctx.remoteAddr = nil
 	ctx.time = zeroTime
 	ctx.c = nil
+	ctx.s.writeEventChain.ReturnOne(ctx.eventChannel)
+	ctx.eventChannel = nil
 
 	ctx.s.bufferPool.Put(ctx.Bytebuffer)
 	ctx.Bytebuffer = nil
-	ctx.s.bufferPool.Put(ctx.OutBuffer)
-	ctx.OutBuffer = nil
+
 }
 
-// GetByteBuffer Maybe concurrency matter
+// GetReadByteBuffer Maybe concurrency matter
 
-func (ctx *RequestCtx) GetByteBuffer() *data.ByteBuffer {
+func (ctx *RequestCtx) GetReadByteBuffer() *data.ByteBuffer {
 	return ctx.Bytebuffer
 }
 
-func (ctx *RequestCtx) GetOutBuffer() *data.ByteBuffer {
-	return ctx.OutBuffer
+func (ctx *RequestCtx) Write(b []byte) (int, error) {
+	n, err := ctx.c.Write(b)
+
+	if err != nil {
+		if ctx.s.OnWriteError(ctx, err) {
+			ctx.c.Close()
+		}
+	}
+
+	ctx.s.OnWrite(ctx, n)
+
+	return n, err
+}
+
+func (ctx *RequestCtx) WriteToChannel(b []byte) {
+	ctx.eventChannel.AddEvent(&writeEventChannelObject{
+		requestCtx: ctx,
+		b:          b,
+	})
+	//ctx.eventChannel.AddEvent(writeEventObjectPool.getObject(ctx, b))
 }
 
 func (ctx *RequestCtx) GetConn() net.Conn {
@@ -129,7 +150,7 @@ func (ctx *RequestCtx) Error(err error) {
 		Logger.Debug("recv error  %v \n", err)
 	}
 
-	if ctx.s.OnError(ctx, err) {
+	if ctx.s.OnReadError(ctx, err) {
 		ctx.CloseConn(err)
 	}
 }
@@ -170,13 +191,17 @@ type connTLSer interface {
 // must be limited.
 type RequestHandler func(ctx *RequestCtx)
 
-type OnError func(ctx *RequestCtx, err error) bool
+type OnReadError func(ctx *RequestCtx, err error) bool
+
+type OnWriteError func(ctx *RequestCtx, err error) bool
 
 type OnClose func(ctx *RequestCtx, err error)
 
 type OnConnect func(ctx *RequestCtx) bool
 
 type OnData func(ctx *RequestCtx, read int) error
+
+type OnWrite func(ctx *RequestCtx, write int)
 
 var globalConnID uint64
 
@@ -197,11 +222,17 @@ func NewServer(options ...Option) server {
 		s.MaxPackageFrameSize = defaultMaxPackageFrameSize
 	}
 
+	if opts.WriterEventChannelSize <= 0 {
+		s.WriterEventChannelSize = defaultWriterEventChannelSize
+	}
+
 	s.Handler = DefaultRequestHandler
 
 	s.OnClose = DummyOnClose
-	s.OnError = DummyOnError
+	s.OnReadError = DummyOnReadError
+	s.OnWriteError = DummyOnWriteError
 	s.OnData = DummyOnData
+	s.OnWrite = DummyOnWrite
 	s.OnConnect = DummyOnConnect
 
 	s.ReadBufferSize = defaultReadBufferSize
@@ -224,13 +255,17 @@ type server struct {
 	//   * io.EOF
 	//   * TimeOut
 
-	OnError OnError
+	OnReadError OnReadError
+
+	OnWriteError OnWriteError
 
 	OnClose OnClose
 
 	OnConnect OnConnect
 
 	OnData OnData
+
+	OnWrite OnWrite
 
 	// The maximum number of concurrent connections the server may serve.
 	//
@@ -239,6 +274,8 @@ type server struct {
 	// Concurrency only works if you either call Serve once, or only ServeConn multiple times.
 	// It works with ListenAndServe as well.
 	Concurrency uint32
+
+	WriterEventChannelSize int
 
 	MaxPackageFrameSize uint
 
@@ -316,6 +353,43 @@ type server struct {
 	connections uint32
 
 	perIPConnCounter util4go.PerIPConnCounter
+
+	writeEventChain *routine.CyclicDistributionEventChain[writeEventChannelObject]
+}
+
+type writeEventChannelObject struct {
+	requestCtx *RequestCtx
+	b          []byte
+}
+
+type writeEventChannelObjectPool struct {
+	pool sync.Pool
+}
+
+var writeEventObjectPool = writeEventChannelObjectPool{}
+
+func (wp *writeEventChannelObjectPool) releaseObject(object *writeEventChannelObject) {
+	object.requestCtx = nil
+	object.b = nil
+	wp.pool.Put(object)
+}
+
+func (wp *writeEventChannelObjectPool) getObject(ctx *RequestCtx, b []byte) *writeEventChannelObject {
+	obj := wp.pool.Get()
+
+	if obj == nil {
+		return &writeEventChannelObject{
+			requestCtx: ctx,
+			b:          b,
+		}
+	}
+
+	rtn := obj.(*writeEventChannelObject)
+
+	rtn.requestCtx = ctx
+	rtn.b = b
+
+	return rtn
 }
 
 // Serve blocks until the given listener returns permanent error.
@@ -345,7 +419,33 @@ func (s *server) Serve(ln net.Listener) error {
 		return err
 	}
 
+	if s.writeEventChain == nil {
+		s.writeEventChain = routine.NewCyclicDistributionEventChain[writeEventChannelObject](s.WriterEventChannelSize)
+	}
+
 	wp.Start()
+
+	s.writeEventChain.Start(routine.EventHander[writeEventChannelObject](func(job routine.EventChannel[writeEventChannelObject],
+		t *writeEventChannelObject) error {
+		_, err := t.requestCtx.Write(t.b)
+		// writeEventObjectPool.releaseObject(t)
+		return err
+
+		//totalN := len(t.b)
+		//write := 0
+		//for {
+		//	n, err := t.conn.Write(t.b[write:])
+		//	if err != nil {
+		//		return err
+		//	}
+		//	write += n
+		//
+		//	if write >= totalN {
+		//		return nil
+		//	}
+		//}
+		// return nil
+	}))
 
 	// Count our waiting to accept a connection as an open connection.
 	// This way we can't get into any weird state where just after accepting
@@ -358,6 +458,7 @@ func (s *server) Serve(ln net.Listener) error {
 		var c net.Conn
 		if c, err = acceptConn(s, ln, &lastPerIPErrorTime); err != nil {
 			wp.Stop()
+			s.writeEventChain.Stop()
 			if err == io.EOF {
 				return nil
 			}
@@ -373,7 +474,7 @@ func (s *server) Serve(ln net.Listener) error {
 			ctx := s.acquireRequestCtx(c)
 			s.wrapContext(c, ctx)
 
-			s.OnError(ctx, ManyConcurrency)
+			s.OnReadError(ctx, ManyConcurrency)
 			s.OnClose(ctx, ManyConcurrency)
 			s.releaseCtx(ctx)
 
@@ -396,6 +497,9 @@ func (s *server) Serve(ln net.Listener) error {
 			}
 		}
 	}
+
+	s.writeEventChain.Stop()
+	wp.Stop()
 
 	return nil
 }
@@ -484,7 +588,6 @@ func (s *server) initContext(c net.Conn, requestCtx *RequestCtx) {
 	requestCtx.s = s
 	requestCtx.remoteAddr = c.RemoteAddr()
 	requestCtx.Bytebuffer = s.bufferPool.Get()
-	requestCtx.OutBuffer = s.bufferPool.Get()
 }
 
 func (s *server) wrapContext(c net.Conn, requestCtx *RequestCtx) {
@@ -494,6 +597,7 @@ func (s *server) wrapContext(c net.Conn, requestCtx *RequestCtx) {
 	requestCtx.isTLS = requestCtx.IsTLS()
 	requestCtx.s = s
 	requestCtx.remoteAddr = c.RemoteAddr()
+	requestCtx.Bytebuffer = s.bufferPool.Get()
 }
 
 func (s *server) closeConn() {
@@ -618,7 +722,7 @@ func wrapPerIPConn(s *server, c net.Conn) net.Conn {
 	if n > s.MaxConnsPerIP {
 		s.perIPConnCounter.Unregister(ip)
 		ctx := s.acquireRequestCtx(c)
-		s.OnError(ctx, ManyRequests)
+		s.OnReadError(ctx, ManyRequests)
 		s.OnClose(ctx, ManyRequests)
 		s.initContext(c, ctx)
 
@@ -638,6 +742,11 @@ func (s *server) acquireRequestCtx(c net.Conn) (ctx *RequestCtx) {
 	}
 
 	ctx.c = c
+	if ch, err := s.writeEventChain.BorrowOne(); err != nil {
+		Logger.Warning("acquireRequestCtx error : %v", err)
+	} else {
+		ctx.eventChannel = ch
+	}
 
 	return ctx
 }

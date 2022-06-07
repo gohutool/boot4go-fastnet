@@ -24,9 +24,10 @@ var zeroTCPAddr = &net.TCPAddr{
 }
 
 const (
-	defaultReadBufferSize      = 4 * 1024
-	defaultWriteBufferSize     = 4 * 1024
-	defaultMaxPackageFrameSize = 4 * 1024
+	defaultReadBufferSize         = 4 * 1024
+	defaultWriteBufferSize        = 4 * 1024
+	defaultMaxPackageFrameSize    = 4 * 1024
+	defaultWriterEventChannelSize = 1000
 )
 
 var zeroTime time.Time
@@ -47,8 +48,14 @@ var (
 
 	}
 
-	DummyOnError = func(ctx *RequestCtx, err error) bool {
+	DummyOnReadError = func(ctx *RequestCtx, err error) bool {
+		Logger.Warning("OnReadError : %v ", err)
 		return true
+	}
+
+	DummyOnWriteError = func(ctx *RequestCtx, err error) bool {
+		Logger.Warning("OnWriteError : %v ", err)
+		return false
 	}
 
 	DummyOnConnect = func(ctx *RequestCtx) bool {
@@ -57,5 +64,8 @@ var (
 
 	DummyOnData = func(ctx *RequestCtx, nread int) error {
 		return nil
+	}
+
+	DummyOnWrite = func(ctx *RequestCtx, nwrite int) {
 	}
 )

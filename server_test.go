@@ -145,7 +145,66 @@ func TestOnDataBase(t *testing.T) {
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
 	s.OnData = handler
 	s.OnClose = OnClose
-	s.ReadTimeout = 10 * time.Second
+	//s.ReadTimeout = 10 * time.Second
+
+	err = s.Serve(l)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
+func TestOnDataBaseWithWriteChannel(t *testing.T) {
+
+	l, err := net.Listen("tcp", ":9888")
+	if err != nil {
+		fmt.Println("Start server error " + err.Error())
+		return
+	}
+
+	var readCount int64 = 0
+	var sentCount int64 = 0
+
+	onWrite := OnWrite(func(ctx *RequestCtx, write int) {
+
+	})
+
+	handler := OnData(func(ctx *RequestCtx, nread int) error {
+		atomic.AddInt64(&readCount, 1)
+		nread = len(ctx.Bytebuffer.Bytes())
+
+		if nread > 0 {
+			cnt := atomic.AddInt64(&sentCount, 1)
+			b := ctx.Bytebuffer.Flip(nread)
+			ctx.WriteToChannel(b)
+			Logger.Debug("recv %v\n", cnt)
+			//n, _ := ctx.Write(b)
+			//
+			//if nread != n {
+			//	fmt.Printf("#########\n")
+			//}
+
+			//Logger.Debug("recv %v %v\n", cnt, n)
+		}
+
+		return nil
+	})
+
+	OnClose := OnClose(func(ctx *RequestCtx, err error) {
+		if err != nil {
+			fmt.Printf("Close with %v\n", err)
+		}
+	})
+
+	go func() {
+		http.ListenAndServe("0.0.0.0:8887", nil)
+	}()
+
+	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
+	s.OnData = handler
+	s.OnClose = OnClose
+	s.OnWrite = onWrite
+	//s.ReadTimeout = 10 * time.Second
 
 	err = s.Serve(l)
 
@@ -448,7 +507,7 @@ func serverConn(c net.Conn) {
 }
 
 func TestClient(t *testing.T) {
-	var clientNum = 1
+	var clientNum = 1000
 	var msgSize = 1024 * 20
 
 	var wg sync.WaitGroup
