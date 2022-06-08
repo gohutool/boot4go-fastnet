@@ -209,6 +209,8 @@ func nextConnID() uint64 {
 	return atomic.AddUint64(&globalConnID, 1)
 }
 
+type Server = server
+
 func NewServer(options ...Option) server {
 	opts := LoadOptions(options...)
 
