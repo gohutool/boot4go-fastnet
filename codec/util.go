@@ -89,3 +89,71 @@ func PackFieldLength(endianMode EndianMode, len LengthFiledByte, dataLen int64) 
 
 	return lengthBuff
 }
+
+func UnpackVariableLength(b []byte) (uint64, int) {
+
+	var vbi uint64
+	var multiplier uint64
+	n := 0
+	for {
+		if n >= len(b) {
+			return 0, 0
+		}
+
+		digit := b[n]
+		n++
+		vbi |= uint64(digit&127) << multiplier
+
+		if vbi > 18446744073709551615 {
+			return 0, -1
+		}
+
+		if (digit & 128) == 0 {
+			break
+		}
+
+		multiplier += 7
+	}
+
+	return vbi, n
+}
+
+func PackVariableLength(length uint64) []byte {
+	var result []byte
+	if length < 128 {
+		result = make([]byte, 1)
+	} else if length < 16384 {
+		result = make([]byte, 2)
+	} else if length < 2097152 {
+		result = make([]byte, 3)
+	} else if length < 268435456 {
+		result = make([]byte, 4)
+	} else if length < 34359738368 {
+		result = make([]byte, 5)
+	} else if length < 4398046511104 {
+		result = make([]byte, 6)
+	} else if length < 562949953421312 {
+		result = make([]byte, 7)
+	} else if length < 72057594037927936 {
+		result = make([]byte, 8)
+	} else if length < 9223372036854775808 {
+		result = make([]byte, 9)
+	} else {
+		result = make([]byte, 10)
+	}
+	var i int
+	for {
+		encodedByte := length % 128
+		length = length / 128
+		// if there are more data to encode, set the top bit of this byte
+		if length > 0 {
+			encodedByte = encodedByte | 128
+		}
+		result[i] = byte(encodedByte)
+		i++
+		if length <= 0 {
+			break
+		}
+	}
+	return result
+}

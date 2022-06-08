@@ -220,10 +220,14 @@ func NewServer(options ...Option) server {
 
 	if opts.MaxPackageFrameSize <= 0 {
 		s.MaxPackageFrameSize = defaultMaxPackageFrameSize
+	} else {
+		s.MaxPackageFrameSize = opts.MaxPackageFrameSize
 	}
 
 	if opts.WriterEventChannelSize <= 0 {
 		s.WriterEventChannelSize = defaultWriterEventChannelSize
+	} else {
+		s.WriterEventChannelSize = opts.WriterEventChannelSize
 	}
 
 	s.Handler = DefaultRequestHandler
@@ -531,11 +535,17 @@ var DefaultRequestHandler = func(ctx *RequestCtx) {
 		}
 
 		if nread > 0 {
-			if uint(ctx.Bytebuffer.Len()) > maxPackageFrameSize-uint(nread) {
+
+			if uint(ctx.Bytebuffer.Len()) >= maxPackageFrameSize {
+				Logger.Warning("the length of byte buffer is exceed of maxPackageFrameSize[%v], connection is reset",
+					maxPackageFrameSize)
 				ctx.Bytebuffer.Reset()
+				ctx.CloseConn(ByteBufferExceedMaxPackageSize)
 			}
+
 			ctx.Bytebuffer.Write(b[:nread])
 			err = ctx.s.OnData(ctx, nread)
+
 			//ctx.c.Write(append([]byte{}, b[:nread]...))
 		} else {
 			//netErr, ok := err.(net.Error); ok && netErr.Timeout()

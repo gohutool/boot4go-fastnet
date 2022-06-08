@@ -19,8 +19,9 @@ import (
 */
 
 var (
-	DelimiterIsEmpty = errors.New("delimiter is Empty")
-	FixLengthInvalid = errors.New("fix length is invalid")
+	DelimiterIsEmpty       = errors.New("delimiter is Empty")
+	FixLengthInvalid       = errors.New("fix length is invalid")
+	VariableLengthOverflow = errors.New("variable length is over flow")
 )
 
 type Decoder[S, T any] func(s *S) (*T, error)
@@ -198,7 +199,7 @@ var FixedLengthFrameEncoder = func(fixLength int) (Encoder[data.ByteBuffer, []by
 
 var FixLengthFieldFrameDecoder = func(em EndianMode, lengthFiledByte LengthFiledByte) (Decoder[data.ByteBuffer, [][]byte], error) {
 
-	len := int64(8)
+	len := uint64(8)
 
 	switch lengthFiledByte {
 	case INT8:
@@ -415,12 +416,12 @@ initialBytesToStrip – the number of first bytes to strip out from the decoded 
 
 var LengthFieldBasedFrameDecoder = func(em EndianMode,
 	lengthFiledByte LengthFiledByte,
-	maxFrameLength int64,
-	lengthFieldOffset int64,
-	lengthAdjustment int64,
-	initialBytesToStrip int64) (Decoder[data.ByteBuffer, [][]byte], error) {
+	maxFrameLength uint64,
+	lengthFieldOffset uint64,
+	lengthAdjustment uint64,
+	initialBytesToStrip uint64) (Decoder[data.ByteBuffer, [][]byte], error) {
 
-	var lengthFieldLength int64 = 8
+	var lengthFieldLength uint64 = 8
 
 	switch lengthFiledByte {
 	case INT8:
@@ -445,7 +446,7 @@ var LengthFieldBasedFrameDecoder = func(em EndianMode,
 		return nil, InitialBytesToStripInvalid
 	}
 
-	if lengthFieldOffset > maxFrameLength-int64(lengthFieldLength) {
+	if lengthFieldOffset > maxFrameLength-lengthFieldLength {
 		return nil, MaxFrameLengthSmallInvalid
 	}
 
@@ -459,8 +460,8 @@ var LengthFieldBasedFrameDecoder = func(em EndianMode,
 
 	return Decoder[data.ByteBuffer, [][]byte](func(bb *data.ByteBuffer) (*[][]byte, error) {
 		b := bb.Bytes()
-		allLen := int64(bb.Len())
-		var idx int64 = 0
+		allLen := uint64(bb.Len())
+		var idx uint64 = 0
 		rtn := make([][]byte, 0)
 
 		for {
@@ -472,7 +473,7 @@ var LengthFieldBasedFrameDecoder = func(em EndianMode,
 				break
 			}
 			// get the value of length data area
-			lenValue := UnpackFieldLength(em, lengthFiledByte, b[idx+lengthFieldOffset:lenDataEndOffset])
+			lenValue := uint64(UnpackFieldLength(em, lengthFiledByte, b[idx+lengthFieldOffset:lenDataEndOffset]))
 
 			// 包的总长度
 			frameLen := lengthFrameRemainLen + lenValue
@@ -485,6 +486,123 @@ var LengthFieldBasedFrameDecoder = func(em EndianMode,
 			}
 
 			one := b[idx+initialBytesToStrip : frameEndOffset]
+			rtn = append(rtn, one)
+
+			idx = frameEndOffset
+		}
+
+		if idx > 0 {
+			bb.Flip(int(idx))
+			return &rtn, nil
+		}
+
+		return nil, nil
+
+	}), nil
+}
+
+// VariableLengthFieldFrameDecoder
+/**
+VariableLengthFieldFrameDecoder
+
+Params:
+maxFrameLength – the maximum length of the frame. If the length of the frame is greater than this value, TooLongFrameException will be thrown.
+lengthFieldOffset – the offset of the length field
+lengthAdjustment – the compensation value to add to the value of the length field
+initialBytesToStripFn – the number of first bytes to strip out from the decoded frame
+*/
+
+var VariableLengthFieldFrameDecoder = func(
+	maxFrameLength uint64,
+	lengthFieldOffset uint64,
+	lengthAdjustment uint64,
+	initialBytesToStripFn func(variableLength uint64) uint64) (Decoder[data.ByteBuffer, [][]byte], error) {
+
+	if maxFrameLength <= 0 {
+		return nil, MaxFrameLengthInvalid
+	}
+
+	if lengthFieldOffset < 0 {
+		return nil, LengthFieldOffsetInvalid
+	}
+
+	var lengthFieldLength uint64 = 1
+	if lengthFieldOffset > maxFrameLength-lengthFieldLength {
+		return nil, MaxFrameLengthSmallInvalid
+	}
+
+	// lengthAdjustment – 长度域的偏移量矫正。
+	// 如果长度域的值，除了包含有效数据域的长度外，还包含了其他域（如长度域自身）长度，那么，就需要进行矫正。
+	// 矫正的值为：包长 - 长度域的值 – 长度域偏移 – 长度域长。
+	//  0 =  包长(12) - 长度域的值(10) – 长度域偏移(0) – 长度域长(2)。
+
+	// 包的总长度看扣除数据域的长度和长度域的长度
+	//lengthFrameRemainLen := lengthAdjustment + lengthFieldOffset + lengthFieldLength
+	lengthFrameRemainLen := lengthAdjustment + lengthFieldOffset
+
+	ii := 0
+
+	return Decoder[data.ByteBuffer, [][]byte](func(bb *data.ByteBuffer) (*[][]byte, error) {
+		b := bb.Bytes()
+		allLen := uint64(bb.Len())
+		var idx uint64 = 0
+		rtn := make([][]byte, 0)
+
+		for {
+			// get the length data area's end offset
+			lenDataStartOffset := idx + lengthFieldOffset
+
+			// the frame length is less than lengthDataEnd
+			if allLen < lenDataStartOffset+lengthFieldLength {
+				break
+			}
+			// get the value of length data area
+			//lenValue := uint64(UnpackFieldLength(em, lengthFiledByte, b[idx+lengthFieldOffset:lenDataEndOffset]))
+			//fmt.Println(lengthFrameRemainLen + lenDataStartOffset + uint64(len(b)))
+			// get the value of length data area
+
+			lenDataEndOffset := lenDataStartOffset + 10
+			if allLen < lenDataEndOffset {
+				lenDataEndOffset = allLen
+			}
+
+			lenValue, n := UnpackVariableLength(b[lenDataStartOffset:lenDataEndOffset])
+
+			if n == 0 {
+				break
+			}
+
+			if n < 0 {
+				return nil, VariableLengthOverflow
+			}
+
+			lengthFieldLength = uint64(n)
+
+			// 包的总长度
+			frameLen := lengthFrameRemainLen + lenValue + lengthFieldLength
+
+			// get the frame end offset
+			frameEndOffset := idx + frameLen
+
+			if allLen < frameEndOffset {
+				break
+			}
+
+			var initialBytesToStrip uint64 = 0
+
+			if initialBytesToStripFn != nil {
+				initialBytesToStrip = initialBytesToStripFn(lengthFieldLength)
+			}
+
+			if initialBytesToStrip < 0 {
+				return nil, InitialBytesToStripInvalid
+			}
+
+			one := b[idx+initialBytesToStrip : frameEndOffset]
+
+			//fmt.Printf("[%v] VariableLen[%v] FiledLen[%v] FrameLen[%v] [%v]\n", ii, lengthFieldLength, lenValue, frameLen, string(one))
+			ii++
+
 			rtn = append(rtn, one)
 
 			idx = frameEndOffset

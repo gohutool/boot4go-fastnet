@@ -33,10 +33,11 @@ const (
 var zeroTime time.Time
 
 var (
-	WorkPoolInitError      = errors.New("encounter error while init worker pool")
-	ManyRequests           = errors.New("The number of connections from your ip exceeds MaxConnsPerIP")
-	ManyConcurrency        = errors.New("The connection cannot be served because Server.Concurrency limit exceeded")
-	ManyBytesPerConnection = errors.New("The connection cannot be served because Max bytes limit exceeded")
+	WorkPoolInitError              = errors.New("encounter error while init worker pool")
+	ManyRequests                   = errors.New("The number of connections from your ip exceeds MaxConnsPerIP")
+	ManyConcurrency                = errors.New("The connection cannot be served because Server.Concurrency limit exceeded")
+	ManyBytesPerConnection         = errors.New("The connection cannot be served because Max bytes limit exceeded")
+	ByteBufferExceedMaxPackageSize = errors.New("ByteBuffer is exceed maxPackageSize")
 )
 
 var (
