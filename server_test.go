@@ -3,6 +3,7 @@ package fastnet
 import (
 	"fmt"
 	"github.com/gohutool/boot4go-fastnet/codec"
+	"github.com/gohutool/boot4go-util/data"
 	"io"
 	"net"
 	"net/http"
@@ -101,7 +102,7 @@ func TestOnDataBase(t *testing.T) {
 
 	//p := data.Pool{DefaultSize: 1024}
 	//
-	//handler := OnData(func(ctx *RequestCtx, b []byte) error {
+	//handler := ByteDataHandler(func(ctx *RequestCtx, b []byte) error {
 	//	atomic.AddInt64(&readCount, 1)
 	//	nread := len(b)
 	//
@@ -114,7 +115,7 @@ func TestOnDataBase(t *testing.T) {
 	//	return nil
 	//})
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		atomic.AddInt64(&readCount, 1)
 		nread = len(ctx.Bytebuffer.Bytes())
 
@@ -143,7 +144,7 @@ func TestOnDataBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	//s.ReadTimeout = 10 * time.Second
 
@@ -169,7 +170,7 @@ func TestOnDataBaseWithWriteChannel(t *testing.T) {
 
 	})
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		atomic.AddInt64(&readCount, 1)
 		nread = len(ctx.Bytebuffer.Bytes())
 
@@ -201,7 +202,7 @@ func TestOnDataBaseWithWriteChannel(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	s.OnWrite = onWrite
 	//s.ReadTimeout = 10 * time.Second
@@ -227,7 +228,7 @@ func TestDelimiterDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		bytesArray, err := decoder(ctx.Bytebuffer)
 
 		if err != nil {
@@ -254,7 +255,7 @@ func TestDelimiterDecoderBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	err = s.Serve(l)
 
@@ -276,7 +277,7 @@ func TestStringLineDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		strs, err := decoder(ctx.Bytebuffer)
 
 		if err != nil {
@@ -304,7 +305,7 @@ func TestStringLineDecoderBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	err = s.Serve(l)
 
@@ -327,7 +328,7 @@ func TestFixedLengthFrameDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		bytesArray, err := decoder(ctx.Bytebuffer)
 
 		if err != nil {
@@ -354,7 +355,7 @@ func TestFixedLengthFrameDecoderBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	err = s.Serve(l)
 
@@ -377,7 +378,7 @@ func TestFixLengthFieldFrameDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		bytesArray, err := decoder(ctx.Bytebuffer)
 
 		if err != nil {
@@ -404,7 +405,7 @@ func TestFixLengthFieldFrameDecoderBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	err = s.Serve(l)
 
@@ -430,7 +431,7 @@ func TestLengthFieldBaseFrameDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
+	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
 		bytesArray, err := decoder(ctx.Bytebuffer)
 
 		if err != nil {
@@ -457,7 +458,7 @@ func TestLengthFieldBaseFrameDecoderBase(t *testing.T) {
 	}()
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
-	s.OnData = handler
+	s.ByteDataHandler = handler
 	s.OnClose = OnClose
 	err = s.Serve(l)
 
@@ -485,21 +486,25 @@ func TestVariableLengthFieldFrameDecoderBase(t *testing.T) {
 		panic(err)
 	}
 
-	handler := OnData(func(ctx *RequestCtx, nread int) error {
-		bytesArray, err := decoder(ctx.Bytebuffer)
-
-		if err != nil {
-			return err
-		}
-
-		if bytesArray != nil {
-			for _, one := range *bytesArray {
-				ctx.Write(one)
-			}
-		}
-
-		return nil
+	d := ByteBufferDecoder(func(bytebuffer *data.ByteBuffer, nread int) (*[][]byte, error) {
+		return decoder(bytebuffer)
 	})
+
+	//handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
+	//	bytesArray, err := decoder(ctx.Bytebuffer)
+	//
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	if bytesArray != nil {
+	//		for _, one := range *bytesArray {
+	//			ctx.Write(one)
+	//		}
+	//	}
+	//
+	//	return nil
+	//})
 
 	OnClose := OnClose(func(ctx *RequestCtx, err error) {
 		if err != nil {
@@ -513,8 +518,14 @@ func TestVariableLengthFieldFrameDecoderBase(t *testing.T) {
 
 	s := NewServer(WithMaxIdleWorkerDuration(10*time.Second),
 		WithMaxPackageFrameSize(1024*10))
-	s.OnData = handler
+	//s.ByteDataHandler = handler
 	s.OnClose = OnClose
+	s.ByteBufferDecoder = d
+	s.OnData = OnData(func(ctx *RequestCtx, b []byte) error {
+		ctx.WriteToChannel(b)
+		return nil
+	})
+
 	err = s.Serve(l)
 
 	if err != nil {
@@ -849,14 +860,14 @@ var (
 )
 
 func TestVariableLengthFieldPackageClient(t *testing.T) {
-	var clientNum = 10
+	var clientNum = 1000
 
 	var wg sync.WaitGroup
 	wg.Add(clientNum)
 
 	//text := Test_SMALL
 	//text := Test_MIDDLE
-	text := Test_BIG
+	text := Test_SMALL
 
 	test := func(id int) {
 		c, err := net.Dial("tcp", "127.0.0.1:9888")
@@ -907,7 +918,7 @@ func TestVariableLengthFieldPackageClient(t *testing.T) {
 			}
 
 			readCount = readCount + nread
-			fmt.Printf("ID[%v] is receive data %v\n", id, string(b[0:nread]))
+			//fmt.Printf("ID[%v] is receive data %v\n", id, string(b[0:nread]))
 
 			if readCount >= sentCount {
 				c.Close()

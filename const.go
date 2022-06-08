@@ -63,10 +63,10 @@ var (
 		return true
 	}
 
-	DummyOnData = func(ctx *RequestCtx, nread int) error {
-		return nil
+	DummyOnWrite = func(ctx *RequestCtx, nwrite int) {
 	}
 
-	DummyOnWrite = func(ctx *RequestCtx, nwrite int) {
+	DummyOnData = func(ctx *RequestCtx, b []byte) error {
+		return nil
 	}
 )

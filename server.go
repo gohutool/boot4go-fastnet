@@ -197,9 +197,11 @@ type OnWriteError func(ctx *RequestCtx, err error) bool
 
 type OnClose func(ctx *RequestCtx, err error)
 
+type OnData func(ctx *RequestCtx, b []byte) error
+
 type OnConnect func(ctx *RequestCtx) bool
 
-type OnData func(ctx *RequestCtx, read int) error
+type ByteDataHandler func(ctx *RequestCtx, read int) error
 
 type OnWrite func(ctx *RequestCtx, write int)
 
@@ -208,6 +210,8 @@ var globalConnID uint64
 func nextConnID() uint64 {
 	return atomic.AddUint64(&globalConnID, 1)
 }
+
+type ByteBufferDecoder func(bytebuffer *data.ByteBuffer, nread int) (*[][]byte, error)
 
 type Server = server
 
@@ -237,9 +241,10 @@ func NewServer(options ...Option) server {
 	s.OnClose = DummyOnClose
 	s.OnReadError = DummyOnReadError
 	s.OnWriteError = DummyOnWriteError
-	s.OnData = DummyOnData
+	s.ByteDataHandler = DefaultByteDataHandler
 	s.OnWrite = DummyOnWrite
 	s.OnConnect = DummyOnConnect
+	s.OnData = DummyOnData
 
 	s.ReadBufferSize = defaultReadBufferSize
 	s.WriteBufferSize = defaultWriteBufferSize
@@ -254,13 +259,14 @@ type server struct {
 	// Take into account that no `panic` recovery is done by `fasthttp` (thus any `panic` will take down the entire server).
 	// Instead the user should use `recover` to handle these situations.
 	Handler RequestHandler
+	// read byte from socket
+	ByteDataHandler ByteDataHandler
 
 	// ErrorHandler for returning a response in case of an error while receiving or parsing the request.
 	//
 	// The following is a non-exhaustive list of errors that can be expected as argument:
 	//   * io.EOF
 	//   * TimeOut
-
 	OnReadError OnReadError
 
 	OnWriteError OnWriteError
@@ -271,7 +277,10 @@ type server struct {
 
 	OnData OnData
 
+	// write byte to socket
 	OnWrite OnWrite
+
+	ByteBufferDecoder ByteBufferDecoder
 
 	// The maximum number of concurrent connections the server may serve.
 	//
@@ -510,6 +519,26 @@ func (s *server) Serve(ln net.Listener) error {
 	return nil
 }
 
+var DefaultByteDataHandler = func(ctx *RequestCtx, nread int) error {
+	if ctx.s.ByteBufferDecoder != nil {
+		bytesArray, err := ctx.s.ByteBufferDecoder(ctx.Bytebuffer, nread)
+
+		if err != nil {
+			return err
+		}
+
+		if bytesArray != nil {
+			for _, one := range *bytesArray {
+				if err1 := ctx.s.OnData(ctx, one); err1 != nil {
+					return err1
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 var DefaultRequestHandler = func(ctx *RequestCtx) {
 	var readCount int64 = 0
 	var maxReadBytesPerConn int64 = ctx.s.MaxReadBytesPerConn
@@ -546,7 +575,8 @@ var DefaultRequestHandler = func(ctx *RequestCtx) {
 			}
 
 			ctx.Bytebuffer.Write(b[:nread])
-			err = ctx.s.OnData(ctx, nread)
+
+			err = ctx.s.ByteDataHandler(ctx, nread)
 
 			//ctx.c.Write(append([]byte{}, b[:nread]...))
 		} else {
