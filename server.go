@@ -46,11 +46,12 @@ type RequestCtx struct {
 	connTime   time.Time
 	remoteAddr net.Addr
 	// Last access time
-	time       time.Time
-	c          net.Conn
-	s          *server
-	Bytebuffer *data.ByteBuffer
-	mu         sync.Mutex
+	time        time.Time
+	c           net.Conn
+	s           *server
+	Bytebuffer  *data.ByteBuffer
+	mu          sync.Mutex
+	contextData any
 
 	eventChannel *routine.EventChannel[writeEventChannelObject]
 }
@@ -89,6 +90,14 @@ func (ctx *RequestCtx) RemoteAddr() net.Addr {
 		return zeroTCPAddr
 	}
 	return addr
+}
+
+func (ctx *RequestCtx) GetContextData() any {
+	return ctx.contextData
+}
+
+func (ctx *RequestCtx) SetContextData(data any) {
+	ctx.contextData = data
 }
 
 func (ctx *RequestCtx) reset() {
@@ -630,6 +639,7 @@ func (s *server) initContext(c net.Conn, requestCtx *RequestCtx) {
 	requestCtx.s = s
 	requestCtx.remoteAddr = c.RemoteAddr()
 	requestCtx.Bytebuffer = s.bufferPool.Get()
+	requestCtx.contextData = nil
 }
 
 func (s *server) wrapContext(c net.Conn, requestCtx *RequestCtx) {
@@ -640,6 +650,7 @@ func (s *server) wrapContext(c net.Conn, requestCtx *RequestCtx) {
 	requestCtx.s = s
 	requestCtx.remoteAddr = c.RemoteAddr()
 	requestCtx.Bytebuffer = s.bufferPool.Get()
+	requestCtx.contextData = nil
 }
 
 func (s *server) closeConn() {
