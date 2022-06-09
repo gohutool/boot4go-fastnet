@@ -860,14 +860,14 @@ var (
 )
 
 func TestVariableLengthFieldPackageClient(t *testing.T) {
-	var clientNum = 1000
+	var clientNum = 100
 
 	var wg sync.WaitGroup
 	wg.Add(clientNum)
 
 	//text := Test_SMALL
 	//text := Test_MIDDLE
-	text := Test_SMALL
+	text := Test_BIG
 
 	test := func(id int) {
 		c, err := net.Dial("tcp", "127.0.0.1:9888")

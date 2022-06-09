@@ -90,11 +90,11 @@ func PackFieldLength(endianMode EndianMode, len LengthFiledByte, dataLen int64) 
 	return lengthBuff
 }
 
-func UnpackVariableLength(b []byte) (uint64, int) {
+func UnpackVariableLength(b []byte, start int) (uint64, int) {
 
 	var vbi uint64
 	var multiplier uint64
-	n := 0
+	n := start
 	for {
 		if n >= len(b) {
 			return 0, 0
@@ -115,7 +115,7 @@ func UnpackVariableLength(b []byte) (uint64, int) {
 		multiplier += 7
 	}
 
-	return vbi, n
+	return vbi, n - start
 }
 
 func PackVariableLength(length uint64) []byte {

@@ -566,7 +566,8 @@ var VariableLengthFieldFrameDecoder = func(
 				lenDataEndOffset = allLen
 			}
 
-			lenValue, n := UnpackVariableLength(b[lenDataStartOffset:lenDataEndOffset])
+			//lenValue, n := UnpackVariableLength(b[lenDataStartOffset:lenDataEndOffset])
+			lenValue, n := UnpackVariableLength(b, int(lenDataStartOffset))
 
 			if n == 0 {
 				break
