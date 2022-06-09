@@ -121,7 +121,7 @@ func (ctx *RequestCtx) GetReadByteBuffer() *data.ByteBuffer {
 	return ctx.Bytebuffer
 }
 
-func (ctx *RequestCtx) Write(b []byte) (int, error) {
+func (ctx *RequestCtx) WriteDirectly(b []byte) (int, error) {
 	n, err := ctx.c.Write(b)
 
 	if err != nil {
@@ -133,6 +133,11 @@ func (ctx *RequestCtx) Write(b []byte) (int, error) {
 	ctx.s.OnWrite(ctx, n)
 
 	return n, err
+}
+
+// For implement the io.Writer
+func (ctx *RequestCtx) Write(b []byte) (int, error) {
+	return len(b), nil
 }
 
 func (ctx *RequestCtx) WriteToChannel(b []byte) {
@@ -451,7 +456,7 @@ func (s *server) Serve(ln net.Listener) error {
 
 	s.writeEventChain.Start(routine.EventHander[writeEventChannelObject](func(job routine.EventChannel[writeEventChannelObject],
 		t *writeEventChannelObject) error {
-		_, err := t.requestCtx.Write(t.b)
+		_, err := t.requestCtx.WriteDirectly(t.b)
 		// writeEventObjectPool.releaseObject(t)
 		return err
 
