@@ -154,7 +154,9 @@ func (ctx *RequestCtx) GetConn() net.Conn {
 
 func (ctx *RequestCtx) CloseConn(err error) {
 	ctx.s.OnClose(ctx, err)
-	ctx.c.Close()
+	if ctx.c != nil {
+		ctx.c.Close()
+	}
 }
 
 func (ctx *RequestCtx) Error(err error) {
