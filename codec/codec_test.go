@@ -50,11 +50,12 @@ func printBytes(b []byte) {
 }
 
 func printResult(b []byte) {
-	n, _ := UnpackVariableLength(b)
-	fmt.Printf("Length Result : %v\n", n)
+	v, n := UnpackVariableLength(b, 0)
+	fmt.Printf("Length Result : %v[%v]\n", v, n)
 }
 
 func TestVariableLengthPack(t *testing.T) {
+	printBytes([]byte{0})
 	printBytes([]byte{127})
 	printBytes([]byte{255, 127})
 	printBytes([]byte{255, 255, 127})
