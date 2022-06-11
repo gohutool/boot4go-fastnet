@@ -43,30 +43,3 @@ var (
 var (
 	Logger = log4go.LoggerManager.GetLogger("gohutool.boot4go.fastnet")
 )
-
-var (
-	DummyOnClose = func(ctx *RequestCtx, err error) {
-
-	}
-
-	DummyOnReadError = func(ctx *RequestCtx, err error) bool {
-		Logger.Warning("OnReadError : %v ", err)
-		return true
-	}
-
-	DummyOnWriteError = func(ctx *RequestCtx, err error) bool {
-		Logger.Warning("OnWriteError : %v ", err)
-		return false
-	}
-
-	DummyOnConnect = func(ctx *RequestCtx) bool {
-		return true
-	}
-
-	DummyOnWrite = func(ctx *RequestCtx, nwrite int) {
-	}
-
-	DummyOnData = func(ctx *RequestCtx, b []byte) error {
-		return nil
-	}
-)

@@ -3,6 +3,7 @@ package fastnet
 import (
 	"fmt"
 	"github.com/gohutool/boot4go-fastnet/codec"
+	routine "github.com/gohutool/boot4go-routine"
 	"github.com/gohutool/boot4go-util/data"
 	"io"
 	"net"
@@ -166,8 +167,16 @@ func TestOnDataBaseWithWriteChannel(t *testing.T) {
 	var readCount int64 = 0
 	var sentCount int64 = 0
 
-	onWrite := OnWrite(func(ctx *RequestCtx, write int) {
-
+	dataEventHandle := DataEventHandle(func(data any, job routine.EventChannel[any]) {
+		if data != nil {
+			one := data.(struct {
+				c net.Conn
+				b []byte
+			})
+			if one.c != nil && one.b != nil {
+				one.c.Write(one.b)
+			}
+		}
 	})
 
 	handler := ByteDataHandler(func(ctx *RequestCtx, nread int) error {
@@ -177,7 +186,15 @@ func TestOnDataBaseWithWriteChannel(t *testing.T) {
 		if nread > 0 {
 			cnt := atomic.AddInt64(&sentCount, 1)
 			b := ctx.Bytebuffer.Flip(nread)
-			ctx.WriteToChannel(b)
+			//ctx.Write(b)
+			ctx.PushEventData(struct {
+				c net.Conn
+				b []byte
+			}{
+				c: ctx.GetConn(),
+				b: b,
+			})
+
 			Logger.Debug("recv %v\n", cnt)
 			//n, _ := ctx.Write(b)
 			//
@@ -203,8 +220,8 @@ func TestOnDataBaseWithWriteChannel(t *testing.T) {
 
 	s := NewServer(WithMaxIdleWorkerDuration(10 * time.Second))
 	s.ByteDataHandler = handler
+	s.DataEventHandle = dataEventHandle
 	s.OnClose = OnClose
-	s.OnWrite = onWrite
 	//s.ReadTimeout = 10 * time.Second
 
 	err = s.Serve(l)
@@ -522,7 +539,8 @@ func TestVariableLengthFieldFrameDecoderBase(t *testing.T) {
 	s.OnClose = OnClose
 	s.ByteBufferDecoder = d
 	s.OnData = OnData(func(ctx *RequestCtx, b []byte) error {
-		ctx.WriteToChannel(b)
+		ctx.Write(b)
+		// ctx.WriteToChannel(b)
 		return nil
 	})
 

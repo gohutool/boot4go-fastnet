@@ -53,7 +53,7 @@ type RequestCtx struct {
 	mu          sync.Mutex
 	contextData any
 
-	eventChannel *routine.EventChannel[writeEventChannelObject]
+	eventChannel *routine.EventChannel[any]
 }
 
 // ConnID returns unique connection ID.
@@ -107,8 +107,11 @@ func (ctx *RequestCtx) reset() {
 	ctx.remoteAddr = nil
 	ctx.time = zeroTime
 	ctx.c = nil
-	ctx.s.writeEventChain.ReturnOne(ctx.eventChannel)
-	ctx.eventChannel = nil
+
+	if ctx.s.dataEventHandleChain != nil {
+		ctx.s.dataEventHandleChain.ReturnOne(ctx.eventChannel)
+		ctx.eventChannel = nil
+	}
 
 	ctx.s.bufferPool.Put(ctx.Bytebuffer)
 	ctx.Bytebuffer = nil
@@ -116,36 +119,20 @@ func (ctx *RequestCtx) reset() {
 }
 
 // GetReadByteBuffer Maybe concurrency matter
-
 func (ctx *RequestCtx) GetReadByteBuffer() *data.ByteBuffer {
 	return ctx.Bytebuffer
 }
 
-func (ctx *RequestCtx) WriteDirectly(b []byte) (int, error) {
-	n, err := ctx.c.Write(b)
-
-	if err != nil {
-		if ctx.s.OnWriteError(ctx, err) {
-			ctx.c.Close()
-		}
+func (ctx *RequestCtx) PushEventData(data any) {
+	if ctx.eventChannel != nil {
+		ctx.eventChannel.AddEvent(&data)
 	}
-
-	ctx.s.OnWrite(ctx, n)
-
-	return n, err
 }
 
 // For implement the io.Writer
 func (ctx *RequestCtx) Write(b []byte) (int, error) {
-	return len(b), nil
-}
-
-func (ctx *RequestCtx) WriteToChannel(b []byte) {
-	ctx.eventChannel.AddEvent(&writeEventChannelObject{
-		requestCtx: ctx,
-		b:          b,
-	})
-	//ctx.eventChannel.AddEvent(writeEventObjectPool.getObject(ctx, b))
+	n, err := ctx.c.Write(b)
+	return n, err
 }
 
 func (ctx *RequestCtx) GetConn() net.Conn {
@@ -205,29 +192,67 @@ type connTLSer interface {
 // if it keeps references to ctx and/or its' members after the return.
 // Consider wrapping RequestHandler into TimeoutHandler if response time
 // must be limited.
+// Handle the process for a client connection, and default handler is DefaultRequestHandler
+// it's in go routine same as process accepted connection
 type RequestHandler func(ctx *RequestCtx)
 
-type OnReadError func(ctx *RequestCtx, err error) bool
-
-type OnWriteError func(ctx *RequestCtx, err error) bool
-
-type OnClose func(ctx *RequestCtx, err error)
-
-type OnData func(ctx *RequestCtx, b []byte) error
-
-type OnConnect func(ctx *RequestCtx) bool
-
+// ByteDataHandler
+// Byte process handler when read some byte from socket, and default handler is DefaultByteDataHandler
+// it's in go routine same as RequestHandler
 type ByteDataHandler func(ctx *RequestCtx, read int) error
 
-type OnWrite func(ctx *RequestCtx, write int)
+// ByteBufferDecoder
+// decode the bytebuffer to data, it will be used in DefaultByteDataHandler, if it is not set, will do nothing data
+// it's in go routine same as RequestHandler
+type ByteBufferDecoder func(bytebuffer *data.ByteBuffer, nread int) (*[][]byte, error)
+
+// DataEventHandle
+// the handle to process the data in Event Handle Object's chain
+// its in go routine same EventHandleChannel
+// must consider the concurrency between RequestHandler and EventHandleChannel
+type DataEventHandle func(data any, job routine.EventChannel[any])
+
+// OnConnect
+// on connect, it will be used in DummyOnConnect
+// its in go routine same as RequestHandler
+type OnConnect func(ctx *RequestCtx) bool
+
+var DummyOnConnect = func(ctx *RequestCtx) bool {
+	return true
+}
+
+// OnData
+// on receive a data after decode, if decoder is null will on whole byte[] to do, it will be used in DummyOnData
+// its in go routine same as RequestHandler
+type OnData func(ctx *RequestCtx, b []byte) error
+
+var DummyOnData = func(ctx *RequestCtx, b []byte) error {
+	return nil
+}
+
+// OnReadError
+// on read error, it will be used in DummyOnReadError
+// its in go routine same as RequestHandler
+type OnReadError func(ctx *RequestCtx, err error) bool
+
+var DummyOnReadError = func(ctx *RequestCtx, err error) bool {
+	Logger.Warning("OnReadError : %v ", err)
+	return true
+}
+
+// OnClose
+// on close, it will be used in DummyOnClose
+// its in go routine same as RequestHandler or in go routine of EventHandleChannel
+type OnClose func(ctx *RequestCtx, err error)
+
+var DummyOnClose = func(ctx *RequestCtx, err error) {
+}
 
 var globalConnID uint64
 
 func nextConnID() uint64 {
 	return atomic.AddUint64(&globalConnID, 1)
 }
-
-type ByteBufferDecoder func(bytebuffer *data.ByteBuffer, nread int) (*[][]byte, error)
 
 type Server = server
 
@@ -253,14 +278,12 @@ func NewServer(options ...Option) server {
 	}
 
 	s.Handler = DefaultRequestHandler
+	s.ByteDataHandler = DefaultByteDataHandler
+	s.OnData = DummyOnData
+	s.OnConnect = DummyOnConnect
 
 	s.OnClose = DummyOnClose
 	s.OnReadError = DummyOnReadError
-	s.OnWriteError = DummyOnWriteError
-	s.ByteDataHandler = DefaultByteDataHandler
-	s.OnWrite = DummyOnWrite
-	s.OnConnect = DummyOnConnect
-	s.OnData = DummyOnData
 
 	s.ReadBufferSize = defaultReadBufferSize
 	s.WriteBufferSize = defaultWriteBufferSize
@@ -274,8 +297,13 @@ type server struct {
 	//
 	// Take into account that no `panic` recovery is done by `fasthttp` (thus any `panic` will take down the entire server).
 	// Instead the user should use `recover` to handle these situations.
+
+	// Handle the process for a client connection, and default handler is DefaultRequestHandler
+	// it's in go routine same as process accepted connection
 	Handler RequestHandler
-	// read byte from socket
+
+	// Byte process handler when read some byte from socket, and default handler is DefaultByteDataHandler
+	// it's in go routine same as RequestHandler
 	ByteDataHandler ByteDataHandler
 
 	// ErrorHandler for returning a response in case of an error while receiving or parsing the request.
@@ -283,20 +311,32 @@ type server struct {
 	// The following is a non-exhaustive list of errors that can be expected as argument:
 	//   * io.EOF
 	//   * TimeOut
-	OnReadError OnReadError
 
-	OnWriteError OnWriteError
-
-	OnClose OnClose
-
+	// on connect, it will be used in DummyOnConnect
+	// its in go routine same as RequestHandler
 	OnConnect OnConnect
 
+	// decode the bytebuffer to data, it will be used in DefaultByteDataHandler, if it is not set, will do nothing data
+	// it's in go routine same as RequestHandler
+	ByteBufferDecoder ByteBufferDecoder
+
+	// on receive a data after decode, if decoder is null will on whole byte[] to do, it will be used in DummyOnData
+	// its in go routine same as RequestHandler
 	OnData OnData
 
-	// write byte to socket
-	OnWrite OnWrite
+	// on read error, it will be used in DummyOnReadError
+	// its in go routine same as RequestHandler
+	OnReadError OnReadError
 
-	ByteBufferDecoder ByteBufferDecoder
+	// on close, it will be used in DummyOnClose
+	// its in go routine same as RequestHandler or in go routine of EventHandleChannel
+	OnClose OnClose
+
+	// the handle to process the data in Event Handle Object's chain
+	// its in go routine same EventHandleChannel
+	// must consider the concurrency between RequestHandler and EventHandleChannel
+	// if it's not nil, the server will initialize a NewCyclicDistributionEventChain
+	DataEventHandle DataEventHandle
 
 	// The maximum number of concurrent connections the server may serve.
 	//
@@ -385,42 +425,7 @@ type server struct {
 
 	perIPConnCounter util4go.PerIPConnCounter
 
-	writeEventChain *routine.CyclicDistributionEventChain[writeEventChannelObject]
-}
-
-type writeEventChannelObject struct {
-	requestCtx *RequestCtx
-	b          []byte
-}
-
-type writeEventChannelObjectPool struct {
-	pool sync.Pool
-}
-
-var writeEventObjectPool = writeEventChannelObjectPool{}
-
-func (wp *writeEventChannelObjectPool) releaseObject(object *writeEventChannelObject) {
-	object.requestCtx = nil
-	object.b = nil
-	wp.pool.Put(object)
-}
-
-func (wp *writeEventChannelObjectPool) getObject(ctx *RequestCtx, b []byte) *writeEventChannelObject {
-	obj := wp.pool.Get()
-
-	if obj == nil {
-		return &writeEventChannelObject{
-			requestCtx: ctx,
-			b:          b,
-		}
-	}
-
-	rtn := obj.(*writeEventChannelObject)
-
-	rtn.requestCtx = ctx
-	rtn.b = b
-
-	return rtn
+	dataEventHandleChain *routine.CyclicDistributionEventChain[any]
 }
 
 // Serve blocks until the given listener returns permanent error.
@@ -450,33 +455,22 @@ func (s *server) Serve(ln net.Listener) error {
 		return err
 	}
 
-	if s.writeEventChain == nil {
-		s.writeEventChain = routine.NewCyclicDistributionEventChain[writeEventChannelObject](s.WriterEventChannelSize)
-	}
-
 	wp.Start()
 
-	s.writeEventChain.Start(routine.EventHander[writeEventChannelObject](func(job routine.EventChannel[writeEventChannelObject],
-		t *writeEventChannelObject) error {
-		_, err := t.requestCtx.WriteDirectly(t.b)
-		// writeEventObjectPool.releaseObject(t)
-		return err
+	if s.DataEventHandle != nil {
 
-		//totalN := len(t.b)
-		//write := 0
-		//for {
-		//	n, err := t.conn.Write(t.b[write:])
-		//	if err != nil {
-		//		return err
-		//	}
-		//	write += n
-		//
-		//	if write >= totalN {
-		//		return nil
-		//	}
-		//}
-		// return nil
-	}))
+		if s.dataEventHandleChain == nil {
+			s.dataEventHandleChain = routine.NewCyclicDistributionEventChain[any](s.WriterEventChannelSize)
+		}
+
+		s.dataEventHandleChain.Start(routine.EventHander[any](func(job routine.EventChannel[any],
+			t *any) error {
+			if t != nil {
+				s.DataEventHandle(*t, job)
+			}
+			return nil
+		}))
+	}
 
 	// Count our waiting to accept a connection as an open connection.
 	// This way we can't get into any weird state where just after accepting
@@ -489,7 +483,7 @@ func (s *server) Serve(ln net.Listener) error {
 		var c net.Conn
 		if c, err = acceptConn(s, ln, &lastPerIPErrorTime); err != nil {
 			wp.Stop()
-			s.writeEventChain.Stop()
+			s.stopDataEventHandleChain()
 			if err == io.EOF {
 				return nil
 			}
@@ -529,7 +523,7 @@ func (s *server) Serve(ln net.Listener) error {
 		}
 	}
 
-	s.writeEventChain.Stop()
+	s.stopDataEventHandleChain()
 	wp.Stop()
 
 	return nil
@@ -549,6 +543,13 @@ var DefaultByteDataHandler = func(ctx *RequestCtx, nread int) error {
 					return err1
 				}
 			}
+		}
+	} else {
+		if err1 := ctx.s.OnData(ctx, ctx.Bytebuffer.Bytes()); err1 != nil {
+			ctx.Bytebuffer.Reset()
+			return err1
+		} else {
+			ctx.Bytebuffer.Reset()
 		}
 	}
 
@@ -635,6 +636,12 @@ func (s *server) serveConn(c net.Conn) (err error) {
 	}
 
 	return nil
+}
+
+func (s *server) stopDataEventHandleChain() {
+	if s.dataEventHandleChain != nil {
+		s.dataEventHandleChain.Stop()
+	}
 }
 
 func (s *server) initContext(c net.Conn, requestCtx *RequestCtx) {
@@ -802,10 +809,13 @@ func (s *server) acquireRequestCtx(c net.Conn) (ctx *RequestCtx) {
 	}
 
 	ctx.c = c
-	if ch, err := s.writeEventChain.BorrowOne(); err != nil {
-		Logger.Warning("acquireRequestCtx error : %v", err)
-	} else {
-		ctx.eventChannel = ch
+
+	if s.dataEventHandleChain != nil {
+		if ch, err := s.dataEventHandleChain.BorrowOne(); err != nil {
+			Logger.Warning("acquireRequestCtx error : %v", err)
+		} else {
+			ctx.eventChannel = ch
+		}
 	}
 
 	return ctx
