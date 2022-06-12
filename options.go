@@ -32,7 +32,7 @@ type Options struct {
 
 	LogAllErrors bool
 
-	WriterEventChannelSize int
+	DataEventChannelSize int
 }
 
 func LoadOptions(options ...Option) *Options {
@@ -50,16 +50,16 @@ func WithOptions(options Options) Option {
 	}
 }
 
-// WithMaxPackageFrameSize
+// WithMaxPackageFrameSize MaxPackageFrameSize
 func WithMaxPackageFrameSize(maxPackageFrameSize uint) Option {
 	return func(opts *Options) {
 		opts.MaxPackageFrameSize = maxPackageFrameSize
 	}
 }
 
-func WithWriterEventChannelSize(writerEventChannelSize int) Option {
+func WithWriterEventChannelSize(dataEventChannelSize int) Option {
 	return func(opts *Options) {
-		opts.WriterEventChannelSize = writerEventChannelSize
+		opts.DataEventChannelSize = dataEventChannelSize
 	}
 }
 

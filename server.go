@@ -271,10 +271,10 @@ func NewServer(options ...Option) server {
 		s.MaxPackageFrameSize = opts.MaxPackageFrameSize
 	}
 
-	if opts.WriterEventChannelSize <= 0 {
-		s.WriterEventChannelSize = defaultWriterEventChannelSize
+	if opts.DataEventChannelSize <= 0 {
+		s.DataEventChannelSize = defaultWriterEventChannelSize
 	} else {
-		s.WriterEventChannelSize = opts.WriterEventChannelSize
+		s.DataEventChannelSize = opts.DataEventChannelSize
 	}
 
 	s.Handler = DefaultRequestHandler
@@ -346,7 +346,7 @@ type server struct {
 	// It works with ListenAndServe as well.
 	Concurrency uint32
 
-	WriterEventChannelSize int
+	DataEventChannelSize int
 
 	MaxPackageFrameSize uint
 
@@ -460,7 +460,7 @@ func (s *server) Serve(ln net.Listener) error {
 	if s.DataEventHandle != nil {
 
 		if s.dataEventHandleChain == nil {
-			s.dataEventHandleChain = routine.NewCyclicDistributionEventChain[any](s.WriterEventChannelSize)
+			s.dataEventHandleChain = routine.NewCyclicDistributionEventChain[any](s.DataEventChannelSize)
 		}
 
 		s.dataEventHandleChain.Start(routine.EventHander[any](func(job routine.EventChannel[any],
@@ -606,7 +606,9 @@ var DefaultRequestHandler = func(ctx *RequestCtx) {
 		}
 
 		if err != nil {
-			ctx.Error(err)
+			if err != io.EOF {
+				ctx.Error(err)
+			}
 			break
 		}
 
